@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sapcc-sentrylogger"
+authors = [
+    { name = "Florian Streibelt", email = "florian.streibelt@sap.com"},
+]
+description = "Drop in replacement for raven to transition to sentry-sdk"
+readme = "README.md"
+requires-python = ">=3.8"
+keywords = ["Sentry", "Raven", "Logging"]
+license = {text = "Apache-2.0"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Development Status :: 4 - Beta",
+]
+
+dynamic = ["version", "dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+version = {attr = "sapcc_sentrylogger.__version__"}  # any module attribute compatible with ast.literal_eval
+readme = {file = ["README.md", "USAGE.md"]}
+
+[project.urls]
+Documentation = "https://github.com/sapcc/sentrylogger"
+Source = "https://github.com/sapcc/sentrylogger"
+Changelog = "https://github.com/sapcc/sentrylogger/CHANGES"
+
