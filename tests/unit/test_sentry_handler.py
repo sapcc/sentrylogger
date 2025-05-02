@@ -86,7 +86,7 @@ class SentryHandlerTest(TestCase):
         with patch.dict(os.environ, {"BOOLTEST": "False"}):
             self.assertFalse(_bool_env("BOOLTEST", True))
 
-    def test_helpers_senitize_dsn_raven_rewrite(self):
+    def test_helpers_sanitize_dsn_raven_rewrite(self):
 
         from sapcc_sentrylogger.handler import _sanitize_dsn
 
@@ -94,44 +94,69 @@ class SentryHandlerTest(TestCase):
         dsn = f"requests+{expected}?foo=bar"
         self.assertEqual(expected, _sanitize_dsn(dsn))
 
-    def test_helpers_senitize_dsn_noop(self):
+    def test_helpers_sanitize_dsn_noop(self):
 
         from sapcc_sentrylogger.handler import _sanitize_dsn
 
         expected = "https://user:pass@fqdn/123"
         self.assertEqual(expected, _sanitize_dsn(expected))
 
-    def test_helpers_integrations_all(self):
+    def test_helpers_integrations_defaults_only(self):
+        """test if we do not add more integrations than possible"""
+
+        from sentry_sdk.integrations import (
+            _DEFAULT_INTEGRATIONS,
+        )  # noqa
+        from sapcc_sentrylogger.handler import _get_iter_default_integrations
+
+        expected_integrations = set(_DEFAULT_INTEGRATIONS)
+        our_integrations = set(
+            [
+                f"{c.__module__}.{c.__name__}"
+                for c in (_get_iter_default_integrations(True)(False))
+            ]
+        )
+        # only without the auto enabling integrations we can test for
+        # the sets to be equal. This will also assert the presence of the
+        # logging integration
+        self.assertEqual(expected_integrations, our_integrations)
+
+    def test_helpers_integrations_logging_disable(self):
+        """Test if we can successfully skip the logging integration."""
+        from sentry_sdk.integrations import _DEFAULT_INTEGRATIONS  #  noqa
+        from sapcc_sentrylogger.handler import _get_iter_default_integrations
+
+        expected_integrations = set(_DEFAULT_INTEGRATIONS)
+        our_integrations = set(
+            [
+                f"{c.__module__}.{c.__name__}"
+                for c in (_get_iter_default_integrations(False)(False))
+            ]
+        )
+        # we expect all default integrations except the logging integration
+        logging_integration = "sentry_sdk.integrations.logging.LoggingIntegration"
+        expected_integrations.remove(logging_integration)
+        self.assertNotIn(logging_integration, our_integrations)
+        # for good measure check if the others are still present:
+        self.assertEqual(expected_integrations, our_integrations)
+
+    def test_helpers_integrations_with_auto(self):
+        """test if we do not add more integrations than possible"""
 
         from sentry_sdk.integrations import (
             _DEFAULT_INTEGRATIONS,
             _AUTO_ENABLING_INTEGRATIONS,
         )  # noqa
-        from sapcc_sentrylogger.handler import _get_integrations
+        from sapcc_sentrylogger.handler import _get_iter_default_integrations
 
-        all_integrations = _DEFAULT_INTEGRATIONS + _AUTO_ENABLING_INTEGRATIONS
-
-        # _get_integrations(enable_defaults, enable_logging, enable_auto)
-        self.assertEqual(all_integrations, _get_integrations(True, True, True))
-
-    def test_helpers_integrations_defaults_only(self):
-
-        from sentry_sdk.integrations import _DEFAULT_INTEGRATIONS  # noqa
-        from sapcc_sentrylogger.handler import _get_integrations
-
-        # _get_integrations(enable_defaults, enable_logging, enable_auto)
-        self.assertEqual(_DEFAULT_INTEGRATIONS, _get_integrations(True, True, False))
-
-    def test_helpers_integrations_logging_disable(self):
-
-        from sapcc_sentrylogger.handler import _get_integrations
-
-        self.assertIn(
-            "sentry_sdk.integrations.logging.LoggingIntegration",
-            _get_integrations(True, True, True),
+        all_integrations = set(_DEFAULT_INTEGRATIONS + _AUTO_ENABLING_INTEGRATIONS)
+        our_integrations = set(
+            [
+                f"{c.__module__}.{c.__name__}"
+                for c in (_get_iter_default_integrations(True)(True))
+            ]
         )
-        # _get_integrations(enable_defaults, enable_logging, enable_auto)
-        self.assertNotIn(
-            "sentry_sdk.integrations.logging.LoggingIntegration",
-            _get_integrations(True, False, True),
-        )
+        # we cannot test for equal, because the result depends on the
+        # installed pyton packages for the auto enabling ones
+        # this make this test a bit silly
+        self.assertEqual(0, len(our_integrations - all_integrations))

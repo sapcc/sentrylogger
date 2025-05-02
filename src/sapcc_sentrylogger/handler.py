@@ -17,11 +17,17 @@ specific language governing permissions and limitations under the License.
 
 import os
 import sys
+from typing import Iterator, Type, List, Sequence, Callable
+
 import sentry_sdk
 
+from logging import getLogger
 from sentry_sdk.consts import VERSION
+from sentry_sdk.integrations import Integration, DidNotEnable
 from sentry_sdk.integrations.logging import EventHandler as SentryEventHandler
 from sentry_sdk.integrations.logging import BreadcrumbHandler as SentryBreadcrumbHandler
+
+logger = getLogger(__name__)
 
 
 def version_to_tuple(version):
@@ -63,20 +69,59 @@ def _bool_env(key: str, default: bool) -> bool:
     return default
 
 
-def _get_integrations(enable_defaults, enable_logging, enable_auto):
-    from sentry_sdk.integrations import (
-        _DEFAULT_INTEGRATIONS,
-        _AUTO_ENABLING_INTEGRATIONS,
-    )  # noqa
+# we need to copy the original code, because upstream decided to explicitly
+# delete this method after its been used once from the module on load time.
+# we need to modify the interator, because the init code will behave differently
+# for integrations added via integrations parameter, auto enabling integrations
+# and default integrations.
+def _generate_default_integrations_iterator(
+    integrations: List[str], auto_enabling_integrations: List[str]
+) -> Callable[[bool], Iterator[Type[Integration]]]:
 
-    integrations = []
-    if enable_defaults:
-        integrations.extend(_DEFAULT_INTEGRATIONS)
+    def iter_default_integrations(with_auto_enabling_integrations):
+        # type: (bool) -> Iterator[Type[Integration]]
+        """Returns an iterator of the default integration classes:"""
+        from importlib import import_module
+
+        if with_auto_enabling_integrations:
+            all_import_strings = integrations + auto_enabling_integrations
+        else:
+            all_import_strings = integrations
+
+        for import_string in all_import_strings:
+            try:
+                module, cls = import_string.rsplit(".", 1)
+                yield getattr(import_module(module), cls)
+            except (DidNotEnable, SyntaxError) as e:
+                logger.debug(
+                    "Did not import default integration %s: %s", import_string, e
+                )
+
+    if isinstance(iter_default_integrations.__doc__, str):
+        for import_string in integrations:
+            iter_default_integrations.__doc__ += "\n- `{}`".format(import_string)
+
+    return iter_default_integrations
+
+
+def _get_iter_default_integrations(enable_logging: bool):
+    from sentry_sdk.integrations import (
+        _DEFAULT_INTEGRATIONS,  # noqa
+        _AUTO_ENABLING_INTEGRATIONS,  # noqa
+    )
+
+    # we need a copy
+    default_integrations = list(_DEFAULT_INTEGRATIONS)
     if not enable_logging:
-        integrations.remove("sentry_sdk.integrations.logging.LoggingIntegration")
-    if enable_auto:
-        integrations.extend(_AUTO_ENABLING_INTEGRATIONS)
-    return integrations
+        default_integrations.remove(
+            "sentry_sdk.integrations.logging.LoggingIntegration"
+        )
+
+    iter_default_integrations = _generate_default_integrations_iterator(
+        integrations=default_integrations,
+        auto_enabling_integrations=_AUTO_ENABLING_INTEGRATIONS,
+    )
+    return iter_default_integrations
 
 
 def _init_client() -> bool:
@@ -91,8 +136,9 @@ def _init_client() -> bool:
         return False
 
     if is_client_initialized():
+        # do we want to use a logger?
         print(
-            "WARNING: Sentry client was already initialized, but not by CCSENTRY!",
+            "WARNING: Sentry client was already initialized, but not by sapcc_sentrylogger!",
             file=sys.stderr,
         )
         return False
@@ -100,7 +146,9 @@ def _init_client() -> bool:
     dsn = os.getenv("SENTRY_DSN")
 
     if not dsn:
-        # is this something we want to handle silently?
+        # Is this something we should handle silently? Do we want to use the logger?
+        # It means there is a logging config enabling sentry but no DSN is set, this
+        # could be intentionally.
         print(
             "NOTICE: SENTRY_DSN not set, sentry will not be enabled!", file=sys.stderr
         )
@@ -134,9 +182,10 @@ def _init_client() -> bool:
     # Source: https://github.com/getsentry/sentry-python/blob/200d0cdde8eed2caa89b91db8b17baabe983d2de/sentry_sdk/integrations/logging.py#L111
     #
     # It is enough to configure the Event and Breadcrumb handlers via log.ini, calling the handler(s)
-    # then happens via the standard python logging library. We need to wrap them, however, to initialize the sdk with our options.
+    # then happens via the standard python logging library. We need to wrap them, however, to initialize the sdk with our options and
+    # prevent the default logging integration to be automatically installed - as it would then be active for all loggers.
     #
-    # Additionally sentry_sdk ships with auto-enabling integrations, that we want to disable by default as well.
+    # Additionally sentry_sdk ships with other auto-enabling integrations, that we want to be able to disable by default as well.
     #
     # Note: Setting default_integrations to False disables all default integrations as well as all auto-enabling integrations,
     # unless they are specifically added in the integrations option ... (https://docs.sentry.io/platforms/python/configuration/options/)
@@ -151,16 +200,19 @@ def _init_client() -> bool:
     # manually provide a list of integrations that should be enabled. We also need to disable default and auto integrations for that:
     # https://github.com/getsentry/sentry-python/blob/282b8f7fae3da3c3ec26e5ee5e1599fc74661a72/sentry_sdk/integrations/__init__.py#L100
 
-    integrations = _get_integrations(
-        enable_default_integrations,
-        enable_logging_integration,
-        auto_enable_integrations,
+    # monkey patch the internal iterator to be able to remove the logging integration on client initialisation:
+    sentry_sdk.integrations.iter_default_integrations = _get_iter_default_integrations(
+        enable_logging_integration
     )
+
+    integrations: Sequence[Integration] = []
+    # at this point we have no support for enabling/disabling specific integrations, but here would be the
+    # point to add them - note they need to be instances of the respective classes.
 
     sentry_sdk.init(
         integrations=integrations,
-        default_integrations=False,
-        auto_enabling_integrations=False,
+        default_integrations=enable_default_integrations,
+        auto_enabling_integrations=auto_enable_integrations,
         debug=debug,
         dsn=dsn,
     )
