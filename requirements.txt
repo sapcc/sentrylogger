@@ -1,2 +1,2 @@
 # Pin to the latest working version
-sentry-sdk==1.45.1 # MIT
+sentry-sdk==3.0.1 # MIT
